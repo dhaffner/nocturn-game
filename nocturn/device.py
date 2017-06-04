@@ -81,10 +81,16 @@ class Device(object):
         dev.set_configuration()
         config = dev.get_active_configuration()
         self.devin, self.devout = config[(0, 0)]
-        self.send_init_packets()
+        # self.send_init_packets()
         self.hardware_map = self.get_hardware_map()
         for ring in range(8):
             self.set_led_ring_mode(ring, 0)
+
+    def reset(self):
+        for (ring, ring_id) in enumerate(self.encoders + [self.speed_dial]):
+            self.set_led_ring_value(ring, 0)
+        for (button, button_id) in enumerate(self.numbered_buttons + self.bottom_buttons):
+            self.set_button(button, 0)
 
     def send_init_packets(self, packets=["b00000", "28002b4a2c002e35", "2a022c722e30", "7f00"]):
         for packet in packets:
@@ -130,6 +136,7 @@ class Device(object):
         self.devout.write(chr(0x70 + button) + chr(value))
 
     def demo(self):
+        self.reset()
         print('Running demo!')
         for j in range(16):
             self.set_button(j, 1)
