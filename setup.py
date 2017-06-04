@@ -49,5 +49,5 @@ setup(
     # What does your project relate to?
     keywords='sample setuptools development',
     packages=['nocturn'],
-    install_requires=['pyusb'],
+    install_requires=['pyusb', 'python-rtmidi', 'mido'],
 )

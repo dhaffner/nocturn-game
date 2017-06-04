@@ -4,6 +4,8 @@ Created on 27.12.2010
 @author: felicitus
 @warning This is my first python program ever. Feel free to fix, blame or burn.
 '''
+import enum
+
 from binascii import unhexlify
 from time import sleep
 
@@ -11,7 +13,66 @@ import usb.core
 import usb.util
 
 
+class Component(object):
+    def __init__(self, devout=None):
+        self.devout = devout
+        self.value = 0
+
+    def write(self, value, component_id=None):
+        changed = self.value == value
+        self.value = value
+        if component_id and self.devout:
+            self.devout.write(chr(component_id) + chr(value))
+
+    def show(self, value):
+        return value
+
+
+class Button(Component):
+    def write(self, value, component_id=None):
+        value = int(value in (1, 127))
+        assert component_id in set(Device.numbered_buttons + Device.bottom_buttons)
+        super(Button, self).write(value, component_id=component_id)
+
+    def show(self, value):
+        if value == 0:
+            return
+        return super(Button, self).show(0 if self.value else 127)
+
+
+class Encoder(Component):
+    def __init__(self, sensitivity=3, **kwargs):
+        self.sensitivity = sensitivity
+        super(Encoder, self).__init__(**kwargs)
+
+    def write(self, value, component_id=None):
+        print(f'Encoder write: {value} -> {component_id}')
+        value *= self.sensitivity
+        value = value if value < 64 else value - 128
+        assert component_id in Device.encoders or component_id == Device.speed_dial
+        super(Encoder, self).write(
+            min(max(0, self.value + value), 127), component_id=component_id)
+
+    def show(self, value, absolute=False):
+        if absolute:
+            return
+        value = value if value < 64 else value - 128
+        value *= self.sensitivity
+        return super(Encoder, self).show(
+            min(max(0, self.value + value), 127))
+
+
+class Slider(Component):
+    pass
+
+
 class Device(object):
+    encoders = [64, 65, 66, 67, 68, 69, 70, 71]
+    slider = 72
+    speed_dial = 74
+    numbered_buttons = [112, 113, 114, 115, 116, 117, 118, 119]
+    bottom_buttons = [120, 121, 122, 123, 124, 125, 126, 127]
+
     def __init__(self, vendor_id=0x1235, product_id=0x000a):
         dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
         if dev is None:
@@ -21,6 +82,9 @@ class Device(object):
         config = dev.get_active_configuration()
         self.devin, self.devout = config[(0, 0)]
         self.send_init_packets()
+        self.hardware_map = self.get_hardware_map()
+        for ring in range(8):
+            self.set_led_ring_mode(ring, 0)
 
     def send_init_packets(self, packets=["b00000", "28002b4a2c002e35", "2a022c722e30", "7f00"]):
         for packet in packets:
@@ -50,6 +114,12 @@ class Device(object):
             self.write(chr(0x50) + chr(value))
         else:
             self.devout.write(chr(0x40 + ring) + chr(value))
+
+    def set_encoder_value(self, encoder_id, value):
+        assert encoder_id in self.encoders
+        assert 0 <= value <= 127, "The LED ring value needs to be between 0 and 127"
+        self.devout.write(chr(0x40 + ring) + chr(value))
+
 
     # Turns a button LED on or off
     # button = 0-16
@@ -86,11 +156,43 @@ class Device(object):
         except usb.core.USBError:
             return
 
+    def update(self, component_id, value):
+        component = self.hardware_map.get(component_id)
+        if component is None:
+            return
+
+        print(f'Writing {value} to {component}')
+        component.write(value, component_id=component_id)
+
     def write(self, packet):
         self.devout.write(packet)
 
-    def echo(self):
+    def get_hardware_map(self):
+        devout = self.devout
+        return {
+            **{encoder_id: Encoder(devout=devout) for encoder_id in self.encoders},
+            **{button_id: Button(devout=devout) for button_id in set(self.numbered_buttons + self.bottom_buttons)},
+            **{self.slider: Slider(devout=devout)},
+            **{self.speed_dial: Encoder(devout=devout)}
+        }
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def __iter__(self):
         while True:
             data = self.read()
-            if data:
-                print(data)
+            if data is None:
+                continue
+            component_id, value = data[1:3]
+            component = self.hardware_map.get(component_id)
+            if component is None:
+                print(f'Component {component_id} sent a message with {value} but no object is mapped.')
+                continue
+            yield (component_id, component.show(value))
+
+
+
